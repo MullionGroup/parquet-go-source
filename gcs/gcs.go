@@ -28,15 +28,44 @@ type File struct {
 
 // NewGcsFileWriter will create a new GCS file writer.
 func NewGcsFileWriter(ctx context.Context, projectID, bucketName, name string) (*File, error) {
-	return NewGcsFileReader(ctx, projectID, bucketName, name)
+	client, err := storage.NewClient(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create storage client: %w", err)
+	}
+
+	r, err := NewGcsFileWriterWithClient(ctx, client, projectID, bucketName, name)
+	if err != nil {
+		return nil, err
+	}
+
+	// Set externalClient to false so we close it when calling `Close`.
+	r.externalClient = false
+
+	return r, nil
 }
 
 // NewGcsFileWriter will create a new GCS file writer with the passed client.
 func NewGcsFileWriterWithClient(ctx context.Context, client *storage.Client, projectID, bucketName, name string) (*File, error) {
-	return NewGcsFileReaderWithClient(ctx, client, projectID, bucketName, name)
+	obj := client.Bucket(bucketName).Object(name)
+
+	//reader, err := gcsobj.NewReader(ctx, obj)
+	//if err != nil {
+	//	return nil, fmt.Errorf("failed to create new reader: %w", err)
+	//}
+
+	return &File{
+		ProjectID:      projectID,
+		BucketName:     bucketName,
+		FilePath:       name,
+		gcsClient:      client,
+		gcsReader:      nil,
+		object:         obj,
+		ctx:            ctx,
+		externalClient: true,
+	}, nil
 }
 
-// NewGcsFileWriter will create a new GCS file reader.
+// NewGcsFileReader will create a new GCS file reader.
 func NewGcsFileReader(ctx context.Context, projectID, bucketName, name string) (*File, error) {
 	client, err := storage.NewClient(ctx)
 	if err != nil {
@@ -107,11 +136,17 @@ func (g *File) Create(name string) (source.ParquetFile, error) {
 
 // Seek implements io.Seeker.
 func (g *File) Seek(offset int64, whence int) (int64, error) {
+	if g.gcsReader == nil {
+		return 0, fmt.Errorf("reader is not initialized")
+	}
 	return g.gcsReader.Seek(offset, whence)
 }
 
 // Read implements io.Reader.
 func (g *File) Read(b []byte) (int, error) {
+	if g.gcsReader == nil {
+		return 0, fmt.Errorf("reader is not initialized")
+	}
 	return g.gcsReader.Read(b)
 }
 
@@ -142,5 +177,8 @@ func (g *File) Close() error {
 		g.gcsWriter = nil
 	}
 
-	return g.gcsReader.Close()
+	if g.gcsReader != nil {
+		return g.gcsReader.Close()
+	}
+	return nil
 }
